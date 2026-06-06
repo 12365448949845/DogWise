@@ -24,7 +24,6 @@ const Discover = () => {
   const [trending, setTrending] = useState<TrendingArticle[]>([]);
 
   const fetchArticles = useCallback(async (params: ArticleQueryParams, append = false) => {
-    if (!append) setLoading(true);
     try {
       const res = await articleApi.getList(params);
       if (append) {
@@ -44,13 +43,18 @@ const Discover = () => {
   useEffect(() => {
     const params: ArticleQueryParams = { page: 1, limit: 6, sort };
     if (activeTag) params.tag = activeTag;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchArticles(params);
   }, [sort, activeTag, fetchArticles]);
 
+  const refreshTrending = useCallback(() => {
+    articleApi.getTrending(true).then((res) => setTrending(res.data.articles)).catch(() => {});
+  }, []);
+
   useEffect(() => {
     articleApi.getPopularTags().then((res) => setTags(res.data.tags)).catch(() => {});
-    articleApi.getTrending().then((res) => setTrending(res.data.articles)).catch(() => {});
-  }, []);
+    refreshTrending();
+  }, [refreshTrending]);
 
   const hasMore = pagination ? pagination.page < pagination.pages : false;
 
@@ -75,11 +79,13 @@ const Discover = () => {
 
   const handleSortChange = (newSort: SortMode) => {
     if (newSort === sort) return;
+    setLoading(true);
     setSort(newSort);
     setArticles([]);
   };
 
   const handleTagClick = (tag: string) => {
+    setLoading(true);
     setActiveTag(activeTag === tag ? null : tag);
     setArticles([]);
   };
@@ -110,9 +116,9 @@ const Discover = () => {
 
   const renderItem = useCallback((_: number, article: Article) => (
     <div className="pb-4">
-      <ArticleCard article={article} />
+      <ArticleCard article={article} onLike={refreshTrending} />
     </div>
-  ), []);
+  ), [refreshTrending]);
 
   const sortButtons: { key: SortMode; icon: string; label: string }[] = [
     { key: 'newest', icon: '🕐', label: '最新' },
@@ -296,37 +302,54 @@ const Discover = () => {
           <div className="sticky top-24 space-y-4">
             {/* Trending Articles */}
             <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
-              <h3 className="text-sm font-bold text-gray-900 dark:text-white mb-3">� 热门文章</h3>
+              <h3 className="text-sm font-bold text-gray-900 dark:text-white mb-3">🔥 热门文章</h3>
               {trending.length > 0 ? (
                 <div className="space-y-3">
                   {trending.map((item, idx) => (
                     <Link
                       key={item._id}
                       to={`/article/${item._id}`}
-                      className="flex gap-3 group"
+                      className="block group rounded-lg p-2 -mx-1 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
                     >
-                      <span className={`text-lg font-extrabold shrink-0 w-6 text-center ${
-                        idx === 0 ? 'text-amber-500' : idx === 1 ? 'text-gray-400' : 'text-amber-700/40'
-                      }`}>
-                        {idx + 1}
-                      </span>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-gray-900 dark:text-white group-hover:text-amber-600 transition-colors line-clamp-2 leading-snug">
-                          {item.title}
-                        </p>
-                        <div className="flex items-center gap-2 mt-1 text-xs text-gray-400">
-                          <span>{item.author.username}</span>
-                          <span>·</span>
-                          <span>❤️ {item.likesCount}</span>
+                      <div className="flex gap-2.5">
+                        <span className={`text-base font-extrabold shrink-0 w-5 text-center mt-0.5 ${
+                          idx === 0 ? 'text-amber-500' : idx === 1 ? 'text-gray-400' : 'text-amber-700/40'
+                        }`}>
+                          {idx + 1}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-900 dark:text-white group-hover:text-amber-600 transition-colors line-clamp-2 leading-snug">
+                            {item.title}
+                          </p>
+                          {item.summary && (
+                            <p className="text-xs text-gray-400 dark:text-gray-500 mt-1 line-clamp-2 leading-relaxed">
+                              {item.summary}
+                            </p>
+                          )}
+                          {item.images && item.images.length > 0 && (
+                            <div className="grid grid-cols-3 gap-1.5 mt-1.5">
+                              {item.images.slice(0, 3).map((img, i) => (
+                                <img
+                                  key={i}
+                                  src={img.startsWith('http') ? img : getImageUrl(img)}
+                                  alt=""
+                                  className="w-full h-12 rounded-md object-cover"
+                                />
+                              ))}
+                            </div>
+                          )}
+                          <div className="flex items-center gap-2 mt-1.5 text-[11px] text-gray-400">
+                            <span className="flex items-center gap-1">
+                              {item.author.avatar ? (
+                                <img src={getImageUrl(item.author.avatar)} alt="" className="w-3.5 h-3.5 rounded-full object-cover" />
+                              ) : null}
+                              {item.author.username}
+                            </span>
+                            <span>❤️ {item.likesCount}</span>
+                            <span>💬 {item.commentCount}</span>
+                          </div>
                         </div>
                       </div>
-                      {item.cover && (
-                        <img
-                          src={getImageUrl(item.cover)}
-                          alt=""
-                          className="w-12 h-12 rounded-lg object-cover shrink-0"
-                        />
-                      )}
                     </Link>
                   ))}
                 </div>
@@ -334,11 +357,13 @@ const Discover = () => {
                 <div className="space-y-3">
                   {Array.from({ length: 3 }).map((_, i) => (
                     <div key={i} className="flex gap-3">
-                      <div className="w-6 h-5 bg-gray-100 dark:bg-gray-700 rounded animate-pulse" />
+                      <div className="w-5 h-5 bg-gray-100 dark:bg-gray-700 rounded animate-pulse" />
                       <div className="flex-1 space-y-1.5">
                         <div className="h-4 bg-gray-100 dark:bg-gray-700 rounded animate-pulse" />
+                        <div className="h-3 bg-gray-100 dark:bg-gray-700 rounded animate-pulse w-3/4" />
                         <div className="h-3 w-1/2 bg-gray-100 dark:bg-gray-700 rounded animate-pulse" />
                       </div>
+                      <div className="w-14 h-14 bg-gray-100 dark:bg-gray-700 rounded-lg animate-pulse shrink-0" />
                     </div>
                   ))}
                 </div>

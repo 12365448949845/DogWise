@@ -12,6 +12,7 @@ import Highlight from '@/components/Highlight';
 interface ArticleCardProps {
   article: Article;
   highlightQuery?: string;
+  onLike?: () => void;
 }
 
 const formatTime = (dateStr: string) => {
@@ -42,7 +43,7 @@ const extractImages = (text: string) => {
 };
 
 
-const ArticleCard = memo(({ article, highlightQuery }: ArticleCardProps) => {
+const ArticleCard = memo(({ article, highlightQuery, onLike }: ArticleCardProps) => {
   const { token, user } = useAppSelector((state) => state.auth);
   const likes = article.likes ?? [];
   const favorites = article.favorites ?? [];
@@ -54,8 +55,8 @@ const ArticleCard = memo(({ article, highlightQuery }: ArticleCardProps) => {
 
   const rawContent = article.summary || article.content || '';
   const { textOnly } = extractImages(rawContent);
-  const inlineImages: string[] = (article as any).images?.length
-    ? (article as any).images
+  const inlineImages: string[] = (article as Article & { images?: string[] }).images?.length
+    ? (article as Article & { images?: string[] }).images!
     : extractImages(article.content || rawContent).images;
   const allImages = article.cover
     ? [...inlineImages, article.cover]
@@ -74,8 +75,9 @@ const ArticleCard = memo(({ article, highlightQuery }: ArticleCardProps) => {
       const res = await articleApi.toggleLike(article._id);
       setLiked(res.data.liked);
       setLikesCount(res.data.likesCount);
+      onLike?.();
     } catch { /* silent */ }
-  }, [token, article._id]);
+  }, [token, article._id, onLike]);
 
   const handleFavorite = useCallback(async (e: React.MouseEvent) => {
     e.preventDefault();

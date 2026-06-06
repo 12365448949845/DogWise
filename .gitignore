@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build output
+InspireHub/dist/
+
+# Environment variables
+.env
+
+# Uploads (user-generated content)
+server/uploads/*
+!server/uploads/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Temp files
+*.timestamp-*

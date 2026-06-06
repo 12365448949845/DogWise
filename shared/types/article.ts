@@ -52,6 +52,8 @@ export interface TrendingArticle {
   _id: string;
   title: string;
   cover: string;
+  summary: string;
+  images: string[];
   author: Pick<User, '_id' | 'username' | 'avatar'>;
   likesCount: number;
   commentCount: number;

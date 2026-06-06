@@ -10,8 +10,19 @@ const PORT = process.env.PORT || 3001;
 
 const path = require('path');
 
+// CORS 配置
+const corsOptions = {
+  origin: process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(',')
+    : ['http://localhost:5173'],  // 默认只允许前端开发服务器
+  credentials: true,  // 允许携带凭证（cookies, authorization headers）
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  maxAge: 86400  // 预检请求缓存 24 小时
+};
+
 // Middlewares
-app.use(cors());
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));

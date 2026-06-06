@@ -113,14 +113,11 @@ const authSlice = createSlice({
         state.loading = false;
         state.user = action.payload;
       })
-      .addCase(fetchCurrentUser.rejected, (state, action) => {
+      .addCase(fetchCurrentUser.rejected, (state) => {
         state.loading = false;
-        const payload = action.payload as { code?: number; message?: string } | undefined;
-        if (payload?.code === 401) {
-          state.user = null;
-          state.token = null;
-          localStorage.removeItem('token');
-        }
+        state.user = null;
+        state.token = null;
+        localStorage.removeItem('token');
       });
   },
 });

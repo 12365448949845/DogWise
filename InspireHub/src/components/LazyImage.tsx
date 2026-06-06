@@ -26,7 +26,7 @@ const LazyImage = memo(({
     if (!el) return;
 
     const observer = new IntersectionObserver(
-      ([entry]) => {
+      ([entry]) => {  
         if (entry.isIntersecting) {
           setInView(true);
           observer.disconnect();

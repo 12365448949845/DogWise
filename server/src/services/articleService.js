@@ -322,18 +322,42 @@ const getTrendingArticles = async (limit = 3) => {
   if (cached) return cached;
 
   const articles = await Article.find({ status: 'published' })
-    .select('title likes commentCount author cover')
+    .select('title likes commentCount author cover content images')
     .populate('author', 'username avatar')
     .lean();
 
+  // Extract all images from markdown content
+  const extractMarkdownImages = (content) => {
+    if (!content) return [];
+    const imgs = [];
+    const regex = /!\[[^\]]*\]\(([^)]+)\)/g;
+    let m;
+    while ((m = regex.exec(content)) !== null) imgs.push(m[1]);
+    return imgs;
+  };
+
   // Compute hotScore and pick top N; expose likesCount + commentCount for display
   const sorted = articles
-    .map((a) => ({
-      ...a,
-      likesCount: a.likes?.length || 0,
-      commentCount: a.commentCount || 0,
-      hotScore: (a.likes?.length || 0) + (a.commentCount || 0),
-    }))
+    .map((a) => {
+      const plainText = (a.content || '').replace(/!\[[^\]]*\]\([^)]+\)/g, '').replace(/[#*>`\-_~\[\]]/g, '').trim();
+      const summary = plainText.slice(0, 80);
+      const allImages = [
+        ...(a.cover ? [a.cover] : []),
+        ...(a.images || []),
+        ...extractMarkdownImages(a.content),
+      ].filter((v, i, arr) => arr.indexOf(v) === i);
+      return {
+        _id: a._id,
+        title: a.title,
+        author: a.author,
+        cover: a.cover,
+        summary,
+        images: allImages,
+        likesCount: a.likes?.length || 0,
+        commentCount: a.commentCount || 0,
+        hotScore: (a.likes?.length || 0) + (a.commentCount || 0),
+      };
+    })
     .sort((a, b) => b.hotScore - a.hotScore)
     .slice(0, limit);
 

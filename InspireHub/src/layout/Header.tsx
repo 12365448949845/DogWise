@@ -87,7 +87,7 @@ const Header = () => {
             {mode === 'dark' ? '☀️' : '🌙'}
           </button>
 
-          {token ? (
+          {token && user ? (
             <>
               <Link
                 to="/write"

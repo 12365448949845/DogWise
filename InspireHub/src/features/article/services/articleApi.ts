@@ -67,7 +67,8 @@ export const articleApi = {
     );
   },
 
-  getTrending() {
+  getTrending(skipCache = false) {
+    if (skipCache) requestCache.invalidate('articles:trending');
     return requestCache.dedupe('articles:trending', () =>
       api.get('/articles/trending') as unknown as Promise<ApiResponse<{ articles: TrendingArticle[] }>>,
       60
