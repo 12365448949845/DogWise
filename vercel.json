@@ -1,0 +1,5 @@
+{
+  "buildCommand": "cd InspireHub && npm install && npm run build",
+  "outputDirectory": "InspireHub/dist",
+  "installCommand": "npm install --prefix InspireHub"
+}
