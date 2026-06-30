@@ -3,6 +3,7 @@ const cors = require('cors');
 require('dotenv').config();
 
 const connectDB = require('./src/config/db');
+const { initializeCollection } = require('./src/config/qdrant');
 const errorHandler = require('./src/middlewares/errorHandler');
 
 const app = express();
@@ -65,6 +66,15 @@ const setupAdmin = async () => {
 // Connect to MongoDB & start server
 connectDB().then(async () => {
   await setupAdmin();
+
+  // 初始化 Qdrant collection
+  try {
+    await initializeCollection();
+  } catch (error) {
+    console.error('[Qdrant] Initialization failed:', error.message);
+    console.log('[Qdrant] Server will continue without vector memory support');
+  }
+
   app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });

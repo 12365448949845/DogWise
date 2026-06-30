@@ -138,7 +138,33 @@ const AIChat = () => {
     // Build conversation history for API (exclude welcome msg & empty placeholder)
     const historyForApi = [...messages, userMsg]
       .filter((m) => m.id !== 0 && m.content)
-      .map((m) => ({ role: m.role === 'ai' ? 'assistant' : 'user', content: m.content }));
+      .map((m) => {
+        if (m.role === 'user' && m.images && m.images.length > 0) {
+          // 多模态消息格式（包含图片）
+          const contentArray = [
+            { type: 'text', text: m.content || '请分析这张图片' }
+          ];
+
+          // 添加所有图片（转换为完整 URL）
+          m.images.forEach(imgUrl => {
+            contentArray.push({
+              type: 'image_url',
+              image_url: { url: getImageUrl(imgUrl) }
+            });
+          });
+
+          return {
+            role: 'user',
+            content: contentArray
+          };
+        }
+
+        // 纯文本消息
+        return {
+          role: m.role === 'ai' ? 'assistant' : 'user',
+          content: m.content
+        };
+      });
 
     // Stream from backend
     const controller = new AbortController();
@@ -155,7 +181,10 @@ const AIChat = () => {
             'Content-Type': 'application/json',
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
           },
-          body: JSON.stringify({ messages: historyForApi }),
+          body: JSON.stringify({
+            messages: historyForApi,
+            conversationId: activeConvId && activeConvId.startsWith('conv_') ? undefined : activeConvId  // 只发送真实的数据库 ID
+          }),
           signal: controller.signal,
         }
       );
@@ -194,6 +223,10 @@ const AIChat = () => {
                 return updated;
               });
               break;
+            }
+            // 接收后端返回的 conversationId
+            if (parsed.type === 'done' && parsed.conversationId) {
+              setActiveConvId(parsed.conversationId);
             }
             if (parsed.content) {
               fullContent += parsed.content;

@@ -49,6 +49,29 @@ const userSchema = new mongoose.Schema(
         ref: 'User',
       },
     ],
+    dogProfile: {
+      dogs: [
+        {
+          name: String,              // 狗的名字
+          breed: String,             // 品种
+          age: Number,               // 年龄（月）
+          gender: String,            // 性别（公/母）
+          weight: Number,            // 体重（kg）
+          allergies: [String],       // 过敏食物/物质
+          healthIssues: [String],    // 健康问题
+          vaccinations: [
+            {
+              name: String,          // 疫苗名称
+              date: Date             // 接种日期
+            }
+          ]
+        }
+      ],
+      preferences: {
+        interestedTopics: [String],  // 关注话题
+        dislikedTopics: [String]     // 不感兴趣话题
+      }
+    }
   },
   { timestamps: true }
 );

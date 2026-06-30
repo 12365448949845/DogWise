@@ -14,7 +14,7 @@ const getHistory = (): string[] => {
 
 const saveHistory = (keyword: string) => {
   const list = getHistory().filter((k) => k !== keyword);
-  list.unshift(keyword);
+  list.unshift(keyword);    
   localStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, MAX_HISTORY)));
 };
 
