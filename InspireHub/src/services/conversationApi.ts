@@ -70,7 +70,7 @@ export const conversationApi = {
   async sendMessage(message: string, conversationId?: string) {
     const token = localStorage.getItem('token');
     const response = await fetch(
-      `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001/api'}/ai/chat`,
+      `${import.meta.env.VITE_API_BASE_URL || '/api'}/ai/chat`,
       {
         method: 'POST',
         headers: {

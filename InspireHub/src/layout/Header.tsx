@@ -118,7 +118,7 @@ const Header = () => {
               >
                 {user?.avatar ? (
                   <img
-                    src={user.avatar.startsWith('http') ? user.avatar : `${import.meta.env.VITE_API_BASE_URL?.replace('/api', '') || 'http://localhost:3001'}${user.avatar}`}
+                    src={user.avatar.startsWith('http') ? user.avatar : `${import.meta.env.VITE_API_BASE_URL?.replace('/api', '') || ''}${user.avatar}`}
                     alt=""
                     className="w-7 h-7 rounded-full object-cover"
                   />
