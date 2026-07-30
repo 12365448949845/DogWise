@@ -48,7 +48,7 @@ class WebSearchTool extends BaseTool {
     };
 
     // 配置搜索引擎
-    this.searchEngine = process.env.SEARCH_ENGINE || 'mock';
+    this.searchEngine = (process.env.SEARCH_ENGINE || 'disabled').toLowerCase();
     this.apiKey = process.env.SERPAPI_API_KEY || '';
   }
 
@@ -62,6 +62,15 @@ class WebSearchTool extends BaseTool {
       return {
         success: false,
         error: '搜索关键词不能为空'
+      };
+    }
+
+    if (!this.isConfigured()) {
+      return {
+        success: false,
+        error: 'Web search is not configured',
+        results: [],
+        source: 'web_search'
       };
     }
 
@@ -81,7 +90,7 @@ class WebSearchTool extends BaseTool {
           results = await this.searchWithDuckDuckGo(query, num_results);
           break;
         default:
-          results = await this.searchWithMockEngine(query, num_results);
+          throw new Error(`Unsupported search engine: ${this.searchEngine}`);
       }
 
       if (results.length === 0) {
@@ -111,6 +120,11 @@ class WebSearchTool extends BaseTool {
         source: 'web_search'
       };
     }
+  }
+
+  isConfigured() {
+    if (this.searchEngine === 'serpapi') return Boolean(this.apiKey);
+    return this.searchEngine === 'duckduckgo';
   }
 
   /**
@@ -191,32 +205,6 @@ class WebSearchTool extends BaseTool {
     }
 
     return results;
-  }
-
-  /**
-   * Mock 搜索引擎
-   */
-  async searchWithMockEngine(query, num) {
-    console.log('[WebSearchTool] ⚠️  Using mock search engine');
-
-    await new Promise(resolve => setTimeout(resolve, 500));
-
-    return [
-      {
-        title: `${query} - 最新资讯`,
-        snippet: `关于 ${query} 的最新信息...（模拟搜索结果）`,
-        url: 'https://example.com/1',
-        source: 'Mock Engine',
-        date: new Date().toISOString()
-      },
-      {
-        title: `${query} - 专业解答`,
-        snippet: `专家对 ${query} 的详细解答...（模拟搜索结果）`,
-        url: 'https://example.com/2',
-        source: 'Mock Engine',
-        date: new Date().toISOString()
-      }
-    ].slice(0, num);
   }
 
   /**

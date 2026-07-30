@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import MultiImagePicker from '@/components/MultiImagePicker';
+import MarkdownRenderer from '@/components/MarkdownRenderer';
 import { getImageUrl } from '@/utils/image';
+import { conversationApi } from '@/services/conversationApi';
 
 /* ─── Types ─── */
 interface ChatMsg {
@@ -59,12 +61,7 @@ const groupByDate = (convs: Conversation[]) => {
 
 /* ─── Component ─── */
 const AIChat = () => {
-  const [conversations, setConversations] = useState<Conversation[]>(() => {
-    try {
-      const saved = localStorage.getItem('dogworld_ai_convs');
-      return saved ? JSON.parse(saved) : [];
-    } catch { return []; }
-  });
+  const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMsg[]>([WELCOME_MSG]);
   const [input, setInput] = useState('');
@@ -77,10 +74,19 @@ const AIChat = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Persist conversations
+  // MongoDB is the authoritative conversation store.
   useEffect(() => {
-    localStorage.setItem('dogworld_ai_convs', JSON.stringify(conversations));
-  }, [conversations]);
+    conversationApi.getList({ page: 1, limit: 50 })
+      .then((response) => {
+        setConversations(response.data.conversations.map((conversation) => ({
+          id: conversation._id,
+          title: conversation.title,
+          messages: [],
+          createdAt: new Date(conversation.createdAt).getTime(),
+        })));
+      })
+      .catch(() => setConversations([]));
+  }, []);
 
   // Auto-scroll to bottom (skip initial welcome-only state)
   const prevMsgCountRef = useRef(messages.length);
@@ -112,13 +118,13 @@ const AIChat = () => {
     });
   }, []);
 
-  const handleSend = useCallback(async (text?: string) => {
+  const handleSend = useCallback(async (text?: string, conversationOverride?: string | null) => {
     const question = text || input.trim();
     if (!question && images.length === 0) return;
     if (streaming) return;
 
-    const convId = activeConvId || `conv_${Date.now()}`;
-    if (!activeConvId) setActiveConvId(convId);
+    const targetConversationId = conversationOverride === undefined ? activeConvId : conversationOverride;
+    let resolvedConversationId = targetConversationId;
 
     // Add user message + empty AI placeholder
     const userMsg: ChatMsg = {
@@ -135,36 +141,15 @@ const AIChat = () => {
     setStreaming(true);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
-    // Build conversation history for API (exclude welcome msg & empty placeholder)
-    const historyForApi = [...messages, userMsg]
-      .filter((m) => m.id !== 0 && m.content)
-      .map((m) => {
-        if (m.role === 'user' && m.images && m.images.length > 0) {
-          // 多模态消息格式（包含图片）
-          const contentArray = [
-            { type: 'text', text: m.content || '请分析这张图片' }
-          ];
-
-          // 添加所有图片（转换为完整 URL）
-          m.images.forEach(imgUrl => {
-            contentArray.push({
-              type: 'image_url',
-              image_url: { url: getImageUrl(imgUrl) }
-            });
-          });
-
-          return {
-            role: 'user',
-            content: contentArray
-          };
-        }
-
-        // 纯文本消息
-        return {
-          role: m.role === 'ai' ? 'assistant' : 'user',
-          content: m.content
-        };
-      });
+    const requestContent = userMsg.images?.length
+      ? [
+          { type: 'text', text: userMsg.content || '请分析这张图片' },
+          ...userMsg.images.map((imageUrl) => ({
+            type: 'image_url',
+            image_url: { url: getImageUrl(imageUrl) },
+          })),
+        ]
+      : userMsg.content;
 
     // Stream from backend
     const controller = new AbortController();
@@ -182,8 +167,8 @@ const AIChat = () => {
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
           },
           body: JSON.stringify({
-            messages: historyForApi,
-            conversationId: activeConvId && activeConvId.startsWith('conv_') ? undefined : activeConvId  // 只发送真实的数据库 ID
+            message: { role: 'user', content: requestContent },
+            conversationId: targetConversationId || undefined,
           }),
           signal: controller.signal,
         }
@@ -226,6 +211,7 @@ const AIChat = () => {
             }
             // 接收后端返回的 conversationId
             if (parsed.type === 'done' && parsed.conversationId) {
+              resolvedConversationId = parsed.conversationId;
               setActiveConvId(parsed.conversationId);
             }
             if (parsed.content) {
@@ -255,11 +241,11 @@ const AIChat = () => {
       abortRef.current = null;
       // Save after streaming done
       setMessages((prev) => {
-        saveConversation(convId, prev);
+        if (resolvedConversationId) saveConversation(resolvedConversationId, prev);
         return prev;
       });
     }
-  }, [input, images, activeConvId, streaming, messages, saveConversation]);
+  }, [input, images, activeConvId, streaming, saveConversation]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -275,15 +261,38 @@ const AIChat = () => {
     setImages([]);
   };
 
-  const loadConversation = (conv: Conversation) => {
+  const loadConversation = async (conv: Conversation) => {
     setActiveConvId(conv.id);
-    setMessages(conv.messages);
+    if (conv.messages.length > 0) {
+      setMessages(conv.messages);
+      return;
+    }
+
+    try {
+      const response = await conversationApi.getById(conv.id);
+      const loadedMessages: ChatMsg[] = response.data.conversation.messages
+        .filter((message) => message.role !== 'system')
+        .map((message, index) => ({
+        id: new Date(message.timestamp).getTime() + index,
+        role: message.role === 'assistant' ? 'ai' : 'user',
+        content: message.content,
+        }));
+      setMessages(loadedMessages);
+      saveConversation(conv.id, loadedMessages);
+    } catch {
+      startNewChat();
+    }
   };
 
-  const deleteConversation = (e: React.MouseEvent, convId: string) => {
+  const deleteConversation = async (e: React.MouseEvent, convId: string) => {
     e.stopPropagation();
-    setConversations((prev) => prev.filter((c) => c.id !== convId));
-    if (activeConvId === convId) startNewChat();
+    try {
+      await conversationApi.delete(convId);
+      setConversations((prev) => prev.filter((c) => c.id !== convId));
+      if (activeConvId === convId) startNewChat();
+    } catch {
+      // Keep the item visible when server deletion fails.
+    }
   };
 
   /* ─── Copy & Edit helpers ─── */
@@ -316,7 +325,7 @@ const AIChat = () => {
     setEditingText('');
 
     // Trigger a new send with edited text
-    setTimeout(() => handleSend(trimmed), 50);
+    setTimeout(() => handleSend(trimmed, null), 50);
   }, [editingText, messages, handleSend]);
 
   const groups = groupByDate(conversations);
@@ -460,8 +469,8 @@ const AIChat = () => {
                         )}
                         {msg.role === 'ai' ? (
                           msg.content ? (
-                            <div className="prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap">
-                              {msg.content}
+                            <div className="prose prose-sm dark:prose-invert max-w-none">
+                              <MarkdownRenderer content={msg.content} />
                               {streaming && msg.id === messages[messages.length - 1]?.id && (
                                 <span className="inline-block w-2 h-4 bg-violet-500 rounded-sm ml-0.5 animate-pulse" />
                               )}
@@ -473,7 +482,7 @@ const AIChat = () => {
                               <span className="w-2 h-2 bg-violet-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
                             </div>
                           ) : (
-                            <div className="prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap">{msg.content}</div>
+                            <div className="prose prose-sm dark:prose-invert max-w-none"><MarkdownRenderer content={msg.content} /></div>
                           )
                         ) : (
                           msg.content && <span className="whitespace-pre-wrap">{msg.content}</span>

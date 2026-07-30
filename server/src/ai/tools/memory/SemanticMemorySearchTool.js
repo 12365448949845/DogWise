@@ -88,7 +88,7 @@ class SemanticMemorySearchTool extends BaseTool {
       // 格式化结果
       const formattedMemories = results.map(r => ({
         content: r.summary || r.content,
-        relevance: r.score || r.rerankScore,
+        relevance: r.rerankScore ?? r.fusionScore ?? r.score ?? 0,
         timestamp: r.metadata?.timestamp,
         topics: r.metadata?.topics || []
       }));

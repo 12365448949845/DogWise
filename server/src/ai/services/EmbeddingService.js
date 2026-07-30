@@ -6,13 +6,23 @@ const { OpenAI } = require('openai');
  */
 class EmbeddingService {
   constructor() {
-    this.client = new OpenAI({
-      apiKey: process.env.ALIYUN_API_KEY,
-      baseURL: process.env.ALIYUN_BASE_URL
-    });
+    this.client = null;
     this.model = process.env.ALIYUN_EMBEDDING_MODEL || 'text-embedding-v3';
 
     console.log(`[EmbeddingService] Initialized with model: ${this.model}`);
+  }
+
+  getClient() {
+    if (!process.env.ALIYUN_API_KEY) {
+      throw new Error('ALIYUN_API_KEY is not configured');
+    }
+    if (!this.client) {
+      this.client = new OpenAI({
+        apiKey: process.env.ALIYUN_API_KEY,
+        baseURL: process.env.ALIYUN_BASE_URL
+      });
+    }
+    return this.client;
   }
 
   /**
@@ -26,7 +36,7 @@ class EmbeddingService {
     }
 
     try {
-      const response = await this.client.embeddings.create({
+      const response = await this.getClient().embeddings.create({
         model: this.model,
         input: text,
         dimensions: 1024
@@ -68,7 +78,7 @@ class EmbeddingService {
       for (let i = 0; i < validTexts.length; i += batchSize) {
         const batch = validTexts.slice(i, i + batchSize);
 
-        const response = await this.client.embeddings.create({
+        const response = await this.getClient().embeddings.create({
           model: this.model,
           input: batch,
           dimensions: 1024

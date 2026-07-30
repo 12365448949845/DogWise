@@ -24,13 +24,16 @@ class HybridRetriever {
    * 初始化 BM25 索引
    * @param {string} userId - 用户 ID
    */
-  async initializeBM25Index(userId) {
+  async initializeBM25Index(userId, filter = null) {
+    this.bm25Retriever.indexDocuments([]);
     try {
+      const qdrantFilter = filter || (userId ? {
+        must: [{ key: 'userId', match: { value: userId } }]
+      } : undefined);
+
       // 从 Qdrant 获取该用户的所有文档
       const scrollResult = await this.qdrantClient.scroll(this.collectionName, {
-        filter: {
-          must: [{ key: 'userId', match: { value: userId } }]
-        },
+        ...(qdrantFilter ? { filter: qdrantFilter } : {}),
         limit: 1000, // 一次最多拉取 1000 条
         with_payload: true,
         with_vector: false
@@ -39,15 +42,14 @@ class HybridRetriever {
       const documents = scrollResult.points.map(point => ({
         id: point.id,
         content: point.payload.content,
+        summary: point.payload.summary,
         userId: point.payload.userId,
-        metadata: point.payload.metadata
+        metadata: point.payload.metadata,
+        conversationId: point.payload.conversationId
       }));
 
-      // 索引到 BM25
-      if (documents.length > 0) {
-        this.bm25Retriever.indexDocuments(documents);
-        console.log(`[HybridRetriever] Initialized BM25 index with ${documents.length} documents`);
-      }
+      this.bm25Retriever.indexDocuments(documents);
+      console.log(`[HybridRetriever] Initialized BM25 index with ${documents.length} documents`);
     } catch (error) {
       console.error('[HybridRetriever] Error initializing BM25 index:', error);
     }
@@ -61,19 +63,17 @@ class HybridRetriever {
    * @param {number} candidateSize - 候选集大小（用于重排）
    * @returns {Promise<Array>} - 检索结果
    */
-  async search(query, userId, topK = 5, candidateSize = 20) {
-    if (!query || !userId) {
+  async search(query, userId, topK = 5, candidateSize = 20, filter = null) {
+    if (!query) {
       return [];
     }
 
     try {
-      // 确保 BM25 索引已初始化
-      if (this.bm25Retriever.getDocumentCount() === 0) {
-        await this.initializeBM25Index(userId);
-      }
+      // Rebuild per search so one user's in-memory index cannot leak into another user's query.
+      await this.initializeBM25Index(userId, filter);
 
       // 1. Dense Retrieval（向量检索）
-      const denseResults = await this.denseSearch(query, userId, candidateSize);
+      const denseResults = await this.denseSearch(query, userId, candidateSize, filter);
 
       // 2. BM25 Retrieval（关键词检索）
       const bm25Results = this.bm25Retriever.search(query, userId, candidateSize);
@@ -96,15 +96,17 @@ class HybridRetriever {
   /**
    * Dense 向量检索
    */
-  async denseSearch(query, userId, limit) {
+  async denseSearch(query, userId, limit, filter = null) {
     try {
       const queryEmbedding = await this.embeddingService.generateEmbedding(query);
 
+      const qdrantFilter = filter || (userId ? {
+        must: [{ key: 'userId', match: { value: userId } }]
+      } : undefined);
+
       const results = await this.qdrantClient.search(this.collectionName, {
         vector: queryEmbedding,
-        filter: {
-          must: [{ key: 'userId', match: { value: userId } }]
-        },
+        ...(qdrantFilter ? { filter: qdrantFilter } : {}),
         limit: limit,
         with_payload: true
       });
@@ -163,7 +165,10 @@ class HybridRetriever {
       .sort((a, b) => b.score - a.score)
       .slice(0, topK);
 
-    return fused.map(item => item.document);
+    return fused.map(item => ({
+      ...item.document,
+      fusionScore: item.score
+    }));
   }
 
   /**

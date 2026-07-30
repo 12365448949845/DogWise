@@ -4,32 +4,37 @@
   "main": "app.js",
   "scripts": {
     "dev": "nodemon app.js",
-    "start": "node app.js"
+    "start": "node app.js",
+    "test": "node --test test/ai-core.test.js",
+    "knowledge:reindex": "node src/ai/knowledge/import-knowledge.js --reset && node src/ai/knowledge/sync-mongo-knowledge.js",
+    "knowledge:sync": "node src/ai/knowledge/sync-mongo-knowledge.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "@langchain/community": "^1.1.28",
     "@langchain/core": "^1.2.1",
-    "@qdrant/js-client-rest": "^1.18.0",
+    "@langchain/openai": "^1.5.3",
+    "@qdrant/js-client-rest": "1.13.0",
     "axios": "^1.18.1",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "ioredis": "^5.10.1",
-    "jieba": "^1.0.0",
     "jsonwebtoken": "^9.0.3",
-    "langchain": "^1.5.2",
     "mongodb": "^7.2.0",
-    "mongoose": "^9.6.1",
-    "multer": "^2.1.1",
-    "natural": "^8.1.1",
-    "sharp": "^0.34.5"
+    "mongoose": "^9.7.2",
+    "multer": "^2.2.0",
+    "sharp": "^0.35.3"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"
+  },
+  "overrides": {
+    "body-parser": "2.3.0",
+    "brace-expansion": "5.0.8",
+    "qs": "6.15.3"
   }
 }

@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const DogWorldAgent = require('../ai/agents/DogWorldAgent');
 const MultiModalAgent = require('../ai/agents/MultiModalAgent');
 const Conversation = require('../models/Conversation');
@@ -7,343 +8,340 @@ const { processMemoryAsync } = require('../ai/services/MemoryProcessingService')
 const QueryRouter = require('../ai/router/QueryRouter');
 const WebSearchDecisionMaker = require('../ai/decision/WebSearchDecisionMaker');
 const toolRegistry = require('../ai/tools');
-const fs = require('fs');
 
-// 从环境变量读取配置
 const ALIYUN_API_KEY = process.env.ALIYUN_API_KEY;
 const ALIYUN_BASE_URL = process.env.ALIYUN_BASE_URL || 'https://dashscope.aliyuncs.com/compatible-mode/v1';
+const MAX_HISTORY_MESSAGES = 20;
+const MAX_TEXT_LENGTH = 10000;
+const MAX_MEDIA_ITEMS = 6;
 
-// 初始化 Redis 和 MemoryManager
 let memoryManager = null;
 try {
-  const redisClient = getRedisClient();
-  memoryManager = new MemoryManager(redisClient);
+  memoryManager = new MemoryManager(getRedisClient());
   console.log('[aiController] MemoryManager initialized');
 } catch (error) {
-  console.error('[aiController] Failed to initialize MemoryManager:', error);
+  console.error('[aiController] Failed to initialize MemoryManager:', error.message);
 }
 
-// 初始化 QueryRouter 和 WebSearchDecisionMaker
 const queryRouter = new QueryRouter();
-const webSearchDecisionMaker = new WebSearchDecisionMaker(ALIYUN_API_KEY, ALIYUN_BASE_URL);
+const webSearchDecisionMaker = ALIYUN_API_KEY
+  ? new WebSearchDecisionMaker(ALIYUN_API_KEY, ALIYUN_BASE_URL)
+  : null;
 
-/**
- * POST /api/ai/chat
- * Body: { messages: [{ role, content }], conversationId?: string }
- *
- * 工作流程：
- * 1. 前端发送完整的 messages 数组（包含历史）
- * 2. Agent 处理并生成回复
- * 3. 后端将完整对话存入数据库
- */
 exports.chatStream = async (req, res) => {
-  const { messages, conversationId } = req.body;
   const userId = req.user?.id;
+  const conversationId = req.body?.conversationId;
 
-  // 写入文件验证代码执行
-  fs.appendFileSync('C:\\Users\\ccp\\Desktop\\vue\\DogWise\\server\\aiController.log',
-    `[${new Date().toISOString()}] chatStream called, user: ${userId}, messages: ${messages?.length}\n`);
+  let currentMessage;
+  let existingConversation = null;
 
-  console.log('[aiController] ========== NEW REQUEST ==========');
-  console.log('[aiController] User:', userId);
-  console.log('[aiController] Messages count:', messages?.length);
-  console.log('[aiController] Last message:', messages?.[messages.length - 1]?.content);
+  try {
+    currentMessage = getIncomingUserMessage(req.body || {});
+    validateUserMessage(currentMessage);
 
-  if (!messages || !Array.isArray(messages) || messages.length === 0) {
-    return res.status(400).json({ code: 400, message: 'messages is required' });
+    if (!ALIYUN_API_KEY) {
+      return res.status(500).json({ code: 500, message: 'Aliyun API key not configured' });
+    }
+
+    if (conversationId) {
+      if (!mongoose.Types.ObjectId.isValid(conversationId)) {
+        return res.status(400).json({ code: 400, message: 'Invalid conversationId' });
+      }
+
+      existingConversation = await Conversation.findOne({
+        _id: conversationId,
+        user: userId,
+        status: 'active'
+      }).lean();
+
+      if (!existingConversation) {
+        return res.status(404).json({ code: 404, message: 'Conversation not found' });
+      }
+    }
+  } catch (error) {
+    const status = error.statusCode || 400;
+    return res.status(status).json({ code: status, message: error.message });
   }
 
-  if (!ALIYUN_API_KEY) {
-    return res.status(500).json({ code: 500, message: 'Aliyun API key not configured' });
-  }
-
-  // Set up SSE headers
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
 
-  let fullAiResponse = '';
-  let savedConversationId = conversationId;
+  const abortController = new AbortController();
+  res.on('close', () => {
+    if (!res.writableEnded) abortController.abort();
+  });
 
   try {
-    // 1. 获取用户最新问题
-    const lastMessage = messages[messages.length - 1];
-    let userQuery = '';
+    const userQuery = getTextContent(currentMessage.content);
+    const history = (existingConversation?.messages || [])
+      .filter(message => message.role === 'user' || message.role === 'assistant')
+      .map(message => ({ role: message.role, content: message.content }));
+    const agentMessages = [...history.slice(-MAX_HISTORY_MESSAGES), currentMessage];
 
-    // 提取文本内容（支持多模态格式）
-    if (Array.isArray(lastMessage?.content)) {
-      // 多模态消息：提取 text 部分
-      const textItem = lastMessage.content.find(item => item.type === 'text');
-      userQuery = textItem?.text || '';
-    } else {
-      // 纯文本消息
-      userQuery = lastMessage?.content || '';
-    }
+    const retrieval = await retrieveContexts(userQuery, {
+      userId,
+      conversationId,
+      signal: abortController.signal
+    });
 
-    console.log(`[aiController] Extracted user query: "${userQuery}"`);
-
-    // 2. 使用 Router 判断是否需要调用 RAG（只对纯文本问题）
-    const shouldUseRAG = userQuery && queryRouter.shouldUseRAG(userQuery);
-    let knowledgeContext = null;
-    let knowledgeResult = null;
-
-    if (shouldUseRAG) {
-      // 3. 主动调用知识库 Tool
-      const searchQuery = queryRouter.extractSearchQuery(userQuery);
-      console.log(`[aiController] RAG triggered, searching knowledge: "${searchQuery}"`);
-
-      const knowledgeTool = toolRegistry.getTool('knowledge_search');
-      knowledgeResult = await knowledgeTool.execute(
-        { query: searchQuery, limit: 3 },
-        { userId }
-      );
-
-      if (knowledgeResult.success && knowledgeResult.knowledge && knowledgeResult.knowledge.length > 0) {
-        // 格式化知识库内容
-        knowledgeContext = knowledgeResult.knowledge.map((k, idx) =>
-          `【知识${idx + 1}】${k.title} - ${k.section}\n${k.content}`
-        ).join('\n\n');
-
-        console.log(`[aiController] Found ${knowledgeResult.knowledge.length} knowledge items`);
-      } else {
-        console.log('[aiController] No knowledge found');
-      }
-    }
-
-    // 4. 使用混合决策器判断是否需要 Web Search
-    let webSearchContext = null;
-    if (shouldUseRAG && knowledgeResult) {
-      const decision = await webSearchDecisionMaker.decide(userQuery, knowledgeResult);
-
-      console.log(`[aiController] 🤔 Web Search Decision: ${decision.needsWebSearch}`);
-      console.log(`[aiController] 📊 Reason: ${decision.reason}`);
-      console.log(`[aiController] 🎯 Decision Layer: ${decision.decisionLayer}`);
-      console.log(`[aiController] 💯 Confidence: ${decision.confidence}`);
-
-      // 5. 如果决策需要 Web Search，则执行
-      if (decision.needsWebSearch) {
-        console.log('[aiController] 🔍 Triggering web search');
-
-        const webSearchTool = toolRegistry.getTool('web_search');
-        if (webSearchTool) {
-          const webSearchResult = await webSearchTool.execute(
-            { query: userQuery, num_results: 3 },
-            { userId, conversationId }
-          );
-
-          if (webSearchResult.success && webSearchResult.results && webSearchResult.results.length > 0) {
-            // 格式化 Web Search 结果
-            webSearchContext = webSearchResult.results.map((r, idx) =>
-              `【搜索结果${idx + 1}】${r.title}\n${r.snippet}\n来源：${r.source} | 链接：${r.url}`
-            ).join('\n\n');
-
-            console.log(`[aiController] ✅ Web search found ${webSearchResult.results.length} results`);
-          } else {
-            console.log('[aiController] ⚠️  Web search returned no results');
-          }
-        }
-      } else {
-        console.log('[aiController] ✅ RAG sufficient, skipping web search');
-      }
-    }
-
-    // 6. 检测是否包含多媒体内容
-    const currentMessage = messages[messages.length - 1];
-    const hasMultimedia = detectMultimedia(currentMessage);
-
-    // 7. 根据是否包含多媒体内容选择 Agent
-    const redisClient = memoryManager ? memoryManager.redis : null;
-    let agent;
-
-    if (hasMultimedia) {
-      console.log('[aiController] Detected multimedia content, using MultiModalAgent');
-      agent = new MultiModalAgent(ALIYUN_API_KEY, ALIYUN_BASE_URL, redisClient);
-    } else {
-      console.log('[aiController] Using DogWorldAgent for text-only conversation');
-      agent = new DogWorldAgent(ALIYUN_API_KEY, ALIYUN_BASE_URL, redisClient);
-    }
+    const redisClient = memoryManager?.redis || null;
+    const Agent = detectMultimedia(currentMessage) ? MultiModalAgent : DogWorldAgent;
+    const agent = new Agent(ALIYUN_API_KEY, ALIYUN_BASE_URL, redisClient);
 
     const context = {
-      userId: userId,
-      token: req.headers.authorization,
-      conversationId: conversationId,
-      knowledgeContext: knowledgeContext, // 传入知识库上下文
-      webSearchContext: webSearchContext, // 传入 Web Search 上下文
+      userId,
+      conversationId,
+      knowledgeContext: retrieval.knowledgeContext,
+      webSearchContext: retrieval.webSearchContext,
+      signal: abortController.signal
     };
 
-    // 8. 调用 Agent，流式输出（只传当前消息，Agent 会从 Redis 加载历史）
-    fullAiResponse = await agent.chat([currentMessage], context, (chunk) => {
+    const fullAiResponse = await agent.chat(agentMessages, context, chunk => {
       if (chunk.type === 'text') {
-        res.write(`data: ${JSON.stringify({ content: chunk.content })}\n\n`);
+        writeSse(res, { content: chunk.content });
       }
     });
 
-    // 3. 保存到数据库
-    const aiMessage = { role: 'assistant', content: fullAiResponse };
+    if (abortController.signal.aborted) return;
 
-    // 转换消息格式以适配 MongoDB schema（content 必须是字符串）
-    const allMessages = [...messages, aiMessage].map(msg => {
-      let contentString = msg.content;
+    const userMessage = toStoredMessage(currentMessage);
+    const aiMessage = toStoredMessage({ role: 'assistant', content: fullAiResponse });
+    let savedConversationId = conversationId;
 
-      // 如果 content 是数组（多模态消息），提取文本部分
-      if (Array.isArray(msg.content)) {
-        const textItem = msg.content.find(item => item.type === 'text');
-        contentString = textItem?.text || '[多媒体消息]';
-      }
-
-      return {
-        role: msg.role,
-        content: contentString,
-        timestamp: new Date(),
-      };
-    });
-
-    if (conversationId) {
-      // 更新已有对话
-      await Conversation.findOneAndUpdate(
-        { _id: conversationId, user: userId },
+    if (existingConversation) {
+      const updated = await Conversation.findOneAndUpdate(
+        { _id: conversationId, user: userId, status: 'active' },
         {
-          messages: allMessages,
-          lastActiveAt: new Date(),
-        }
+          $push: { messages: { $each: [userMessage, aiMessage] } },
+          $set: { lastActiveAt: new Date() }
+        },
+        { new: true }
       );
+
+      if (!updated) throw new Error('Conversation changed or is no longer available');
     } else {
-      // 创建新对话
-      const firstUserMsg = messages.find(m => m.role === 'user');
-
-      // 提取标题（处理多模态消息）
-      let title = '新对话';
-      if (firstUserMsg) {
-        if (Array.isArray(firstUserMsg.content)) {
-          const textItem = firstUserMsg.content.find(item => item.type === 'text');
-          title = textItem?.text?.slice(0, 30) || '图片对话';
-        } else {
-          title = firstUserMsg.content.slice(0, 30);
-        }
-      }
-
-      const newConv = await Conversation.create({
+      const created = await Conversation.create({
         user: userId,
-        title,
-        messages: allMessages,
+        title: createConversationTitle(currentMessage),
+        messages: [userMessage, aiMessage]
       });
-
-      savedConversationId = newConv._id.toString();
+      savedConversationId = created._id.toString();
     }
 
-    // 4. 保存到 Redis（短期记忆）
-    if (memoryManager && savedConversationId) {
-      await memoryManager.saveMessages(savedConversationId, allMessages.map(m => ({
-        role: m.role,
-        content: m.content,
-      })));
+    const recentMessages = [...history, userMessage, aiMessage];
+    if (memoryManager) {
+      await memoryManager.saveMessages(savedConversationId, recentMessages);
     }
 
-    // 5. 异步处理长期记忆（不阻塞响应）
-    if (savedConversationId && userId) {
-      processMemoryAsync(savedConversationId, allMessages, userId).catch(err => {
-        console.error('[aiController] Long-term memory processing error:', err);
-      });
-    }
+    processMemoryAsync(savedConversationId, [userMessage, aiMessage], userId).catch(error => {
+      console.error('[aiController] Long-term memory processing error:', error.message);
+    });
 
-    // 6. 发送结束信号和会话 ID
-    res.write(`data: ${JSON.stringify({
+    writeSse(res, {
       type: 'done',
-      conversationId: savedConversationId
-    })}\n\n`);
-    res.write('data: [DONE]\n\n');
-    res.end();
-
+      conversationId: savedConversationId,
+      sources: retrieval.sources
+    });
+    if (!res.writableEnded) {
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
   } catch (error) {
-    console.error('[aiController] Error:', error);
-    res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
-    res.write('data: [DONE]\n\n');
-    res.end();
+    if (abortController.signal.aborted) return;
+    console.error('[aiController] Chat error:', error);
+    writeSse(res, { error: 'AI service is temporarily unavailable' });
+    if (!res.writableEnded) {
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
   }
-
-  // Handle client disconnect
-  req.on('close', () => {
-    console.log('[aiController] Client disconnected');
-  });
 };
 
-/**
- * 检测消息中是否包含多媒体内容
- */
-function detectMultimedia(message) {
-  if (!message || !message.content) return false;
+async function retrieveContexts(userQuery, context) {
+  let knowledgeResult = null;
+  let knowledgeContext = null;
+  let webSearchContext = null;
+  const sources = [];
 
-  // 检测是否包含图片或视频 URL
-  if (Array.isArray(message.content)) {
-    return message.content.some(item =>
-      item.type === 'image_url' ||
-      item.type === 'video_url' ||
-      item.image_url ||
-      item.video_url
-    );
+  if (!userQuery || !queryRouter.shouldUseRAG(userQuery)) {
+    return { knowledgeContext, webSearchContext, sources };
   }
 
-  return false;
+  const knowledgeTool = toolRegistry.getTool('knowledge_search');
+  knowledgeResult = await knowledgeTool.execute(
+    { query: queryRouter.extractSearchQuery(userQuery), limit: 3 },
+    context
+  );
+
+  if (knowledgeResult.success && knowledgeResult.knowledge?.length) {
+    knowledgeContext = knowledgeResult.knowledge.map((item, index) =>
+      `[Knowledge ${index + 1}] ${item.title} - ${item.section}\n${item.content}`
+    ).join('\n\n');
+
+    sources.push(...knowledgeResult.knowledge.map(item => ({
+      type: 'knowledge',
+      title: item.title,
+      section: item.section,
+      score: getKnowledgeScore(item)
+    })));
+  }
+
+  const webSearchTool = toolRegistry.getTool('web_search');
+  if (!webSearchDecisionMaker || !webSearchTool?.isConfigured() || context.signal?.aborted) {
+    return { knowledgeResult, knowledgeContext, webSearchContext, sources };
+  }
+
+  const decision = await webSearchDecisionMaker.decide(userQuery, knowledgeResult);
+  if (!decision.needsWebSearch) {
+    return { knowledgeResult, knowledgeContext, webSearchContext, sources };
+  }
+
+  const webResult = await webSearchTool.execute(
+    { query: userQuery, num_results: 3 },
+    context
+  );
+
+  if (webResult.success && webResult.results?.length) {
+    webSearchContext = webResult.results.map((item, index) =>
+      `[Web ${index + 1}] ${item.title}\n${item.snippet}\nSource: ${item.source} | URL: ${item.url}`
+    ).join('\n\n');
+
+    sources.push(...webResult.results.map(item => ({
+      type: 'web',
+      title: item.title,
+      url: item.url,
+      source: item.source
+    })));
+  }
+
+  return { knowledgeResult, knowledgeContext, webSearchContext, sources };
 }
 
-/**
- * 评估 RAG 检索结果的充分性
- * @param {Object} knowledgeResult - RAG 检索结果
- * @param {string} userQuery - 用户查询
- * @returns {Object} - { level: 'sufficient' | 'insufficient', reason: string }
- */
-exports.evaluateRAGSufficiency = function(knowledgeResult, userQuery) {
-  // 1. 如果没有检索到任何知识
-  if (!knowledgeResult.success || !knowledgeResult.knowledge || knowledgeResult.knowledge.length === 0) {
-    return {
-      level: 'insufficient',
-      reason: 'No knowledge retrieved from RAG'
-    };
+function getIncomingUserMessage(body) {
+  if (body.message !== undefined) {
+    if (typeof body.message === 'string') {
+      return { role: 'user', content: body.message };
+    }
+    if (body.message && typeof body.message === 'object') {
+      return { role: 'user', content: body.message.content };
+    }
+  }
+
+  if (Array.isArray(body.messages)) {
+    const lastUserMessage = [...body.messages].reverse().find(message => message?.role === 'user');
+    if (lastUserMessage) return { role: 'user', content: lastUserMessage.content };
+  }
+
+  const error = new Error('A user message is required');
+  error.statusCode = 400;
+  throw error;
+}
+
+function validateUserMessage(message) {
+  const { content } = message || {};
+
+  if (typeof content === 'string') {
+    if (!content.trim()) throw new Error('Message content cannot be empty');
+    if (content.length > MAX_TEXT_LENGTH) throw new Error('Message content is too long');
+    return;
+  }
+
+  if (!Array.isArray(content) || content.length === 0) {
+    throw new Error('Unsupported message content');
+  }
+  if (content.length > MAX_MEDIA_ITEMS + 1) {
+    throw new Error('Too many message attachments');
+  }
+
+  let hasContent = false;
+  for (const item of content) {
+    if (item?.type === 'text') {
+      if (typeof item.text !== 'string' || item.text.length > MAX_TEXT_LENGTH) {
+        throw new Error('Invalid text content');
+      }
+      hasContent ||= Boolean(item.text.trim());
+      continue;
+    }
+
+    if (item?.type === 'image_url' && typeof item.image_url?.url === 'string') {
+      hasContent = true;
+      continue;
+    }
+
+    if (item?.type === 'video_url' && typeof item.video_url?.url === 'string') {
+      hasContent = true;
+      continue;
+    }
+
+    throw new Error('Unsupported message attachment');
+  }
+
+  if (!hasContent) throw new Error('Message content cannot be empty');
+}
+
+function getTextContent(content) {
+  if (typeof content === 'string') return content.trim();
+  const text = content.find(item => item?.type === 'text')?.text;
+  return typeof text === 'string' ? text.trim() : '';
+}
+
+function toStoredMessage(message) {
+  const isMultimedia = Array.isArray(message.content);
+  return {
+    role: message.role,
+    content: getTextContent(message.content) || (isMultimedia ? '[Multimedia message]' : ''),
+    timestamp: new Date()
+  };
+}
+
+function createConversationTitle(message) {
+  const text = getTextContent(message.content);
+  return (text || 'Image conversation').slice(0, 30);
+}
+
+function detectMultimedia(message) {
+  return Array.isArray(message?.content) && message.content.some(item =>
+    item?.type === 'image_url' || item?.type === 'video_url'
+  );
+}
+
+function getKnowledgeScore(item) {
+  const value = item?.score ?? item?.relevance ?? 0;
+  return Number.isFinite(Number(value)) ? Number(value) : 0;
+}
+
+function writeSse(res, payload) {
+  if (!res.writableEnded && !res.destroyed) {
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  }
+}
+
+exports.evaluateRAGSufficiency = function evaluateRAGSufficiency(knowledgeResult, userQuery) {
+  if (!knowledgeResult?.success || !knowledgeResult.knowledge?.length) {
+    return { level: 'insufficient', reason: 'No knowledge retrieved from RAG' };
   }
 
   const knowledge = knowledgeResult.knowledge;
+  const avgScore = knowledge.reduce((sum, item) => sum + getKnowledgeScore(item), 0) / knowledge.length;
+  const totalLength = knowledge.reduce((sum, item) => sum + (item.content?.length || 0), 0);
+  const timeKeywords = ['最新', '新政策', '近期', '今年', '最近', String(new Date().getFullYear())];
 
-  // 2. 检查检索结果数量（少于2个认为不足）
-  if (knowledge.length < 2) {
-    return {
-      level: 'insufficient',
-      reason: `Only ${knowledge.length} knowledge item found, may be incomplete`
-    };
+  if (timeKeywords.some(keyword => userQuery.includes(keyword))) {
+    return { level: 'insufficient', reason: 'Query requires current information' };
   }
-
-  // 3. 检查相关性分数（如果有的话）
-  const avgScore = knowledge.reduce((sum, k) => sum + (k.score || 0), 0) / knowledge.length;
-  if (avgScore < 0.5) {
-    return {
-      level: 'insufficient',
-      reason: `Low relevance score (avg: ${avgScore.toFixed(2)})`
-    };
+  if (knowledge.length < 2 || avgScore < 0.5 || totalLength < 100) {
+    return { level: 'insufficient', reason: `RAG quality is low (score: ${avgScore.toFixed(2)})` };
   }
+  return { level: 'sufficient', reason: `${knowledge.length} items with score ${avgScore.toFixed(2)}` };
+};
 
-  // 4. 检测时效性问题（关键词匹配）
-  const timeKeywords = ['2024', '2025', '2026', '最新', '新政策', '近期', '今年'];
-  const needsLatestInfo = timeKeywords.some(keyword => userQuery.includes(keyword));
-
-  if (needsLatestInfo) {
-    return {
-      level: 'insufficient',
-      reason: 'Query requires latest information, RAG may be outdated'
-    };
-  }
-
-  // 5. 检查内容长度（总字数少于100认为不足）
-  const totalLength = knowledge.reduce((sum, k) => sum + k.content.length, 0);
-  if (totalLength < 100) {
-    return {
-      level: 'insufficient',
-      reason: `Content too short (${totalLength} chars), may lack details`
-    };
-  }
-
-  // 6. 默认认为充分
-  return {
-    level: 'sufficient',
-    reason: `${knowledge.length} items retrieved with avg score ${avgScore.toFixed(2)}`
-  };
+exports._private = {
+  getIncomingUserMessage,
+  validateUserMessage,
+  getTextContent,
+  getKnowledgeScore,
+  detectMultimedia
 };

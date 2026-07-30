@@ -215,9 +215,9 @@ class X {
   get postprocessing() {
     return this.#postprocessing;
   }
-  set postprocessing(value: { setSize: (w: number, h: number) => void; render: () => void; dispose: () => void }) {
+  set postprocessing(value: { setSize: (w: number, h: number) => void; render: () => void; dispose: () => void } | null) {
     this.#postprocessing = value;
-    this.render = value.render.bind(value);
+    this.render = value ? value.render.bind(value) : this.#render.bind(this);
   }
 
   #onIntersection(entries: IntersectionObserverEntry[]) {

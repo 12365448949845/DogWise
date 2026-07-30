@@ -1,3 +1,5 @@
+const { deterministicPointId } = require('../utils/pointId');
+
 /**
  * SemanticChunker - 语义记忆切块器
  * 将对话消息切分为适合向量存储的语义块
@@ -25,6 +27,7 @@ class SemanticChunker {
     // 按对话轮次切块（用户消息 + 后续的 AI 回复）
     for (let i = 0; i < messages.length; i++) {
       const userMsg = messages[i];
+      if (userMsg.role !== 'user') continue;
 
       // 查找对应的 AI 回复（在原始对话中紧跟用户消息的 assistant 消息）
       const aiMsg = this.findCorrespondingAIResponse(messages, i);
@@ -36,21 +39,21 @@ class SemanticChunker {
         const subChunks = this.splitLongContent(content, {
           conversationId,
           userId,
-          roundIndex: i,
+          roundIndex: userMsg.index ?? i,
           timestamp: userMsg.timestamp
         });
         chunks.push(...subChunks);
       } else {
         // 创建单个 chunk
         chunks.push({
-          id: `${conversationId}_${Date.now()}_${i}`,
+          id: deterministicPointId(`${conversationId}:${userMsg.index ?? i}:${content}:0`),
           conversationId,
           userId,
           content: content,
           summary: null, // 稍后由 LLM 生成
           metadata: {
             timestamp: userMsg.timestamp || new Date(),
-            roundIndex: i,
+            roundIndex: userMsg.index ?? i,
             topics: this.extractTopics(content),
             sentiment: this.detectSentiment(content),
             intent: 'user_expression'
@@ -105,7 +108,7 @@ class SemanticChunker {
         // 当前 chunk 已满，保存并开始新 chunk
         if (currentChunk.length > 0) {
           chunks.push({
-            id: `${baseMetadata.conversationId}_${Date.now()}_${baseMetadata.roundIndex}_${chunkIndex}`,
+            id: deterministicPointId(`${baseMetadata.conversationId}:${baseMetadata.roundIndex}:${currentChunk.trim()}:${chunkIndex}`),
             conversationId: baseMetadata.conversationId,
             userId: baseMetadata.userId,
             content: currentChunk.trim(),
@@ -126,7 +129,7 @@ class SemanticChunker {
     // 保存最后一个 chunk
     if (currentChunk.length > 0) {
       chunks.push({
-        id: `${baseMetadata.conversationId}_${Date.now()}_${baseMetadata.roundIndex}_${chunkIndex}`,
+        id: deterministicPointId(`${baseMetadata.conversationId}:${baseMetadata.roundIndex}:${currentChunk.trim()}:${chunkIndex}`),
         conversationId: baseMetadata.conversationId,
         userId: baseMetadata.userId,
         content: currentChunk.trim(),

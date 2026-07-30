@@ -1,16 +1,22 @@
+require('dotenv').config();
 const KnowledgeDocumentProcessor = require('./KnowledgeDocumentProcessor');
 const KnowledgeVectorManager = require('./KnowledgeVectorManager');
 
 /**
  * 批量导入知识库文档到 Qdrant
  */
-async function importKnowledge() {
+async function importKnowledge(options = {}) {
   console.log('\n=== 开始导入知识库 ===\n');
 
   const processor = new KnowledgeDocumentProcessor();
   const vectorManager = new KnowledgeVectorManager();
 
   try {
+    if (options.reset) {
+      console.log('0. 重建向量集合...');
+      await vectorManager.clearAllKnowledge();
+    }
+
     // 1. 扫描所有文档文件
     console.log('1. 扫描知识库文档...');
     const files = await processor.scanDocuments();
@@ -69,7 +75,7 @@ async function importKnowledge() {
 
 // 直接运行
 if (require.main === module) {
-  importKnowledge()
+  importKnowledge({ reset: process.argv.includes('--reset') })
     .then(() => {
       console.log('导入成功完成');
       process.exit(0);

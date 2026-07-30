@@ -1,6 +1,7 @@
 const { getQdrantClient } = require('../../config/qdrant');
 const EmbeddingService = require('../services/EmbeddingService');
 const HybridRetriever = require('../retrieval/HybridRetriever');
+const { deterministicPointId } = require('../utils/pointId');
 
 /**
  * VectorMemoryManager - 向量记忆管理器
@@ -32,7 +33,7 @@ class VectorMemoryManager {
       // 存储到 Qdrant
       await this.client.upsert(this.collectionName, {
         points: [{
-          id: chunk.id || `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: chunk.id || deterministicPointId(`${chunk.conversationId}:${chunk.content}`),
           vector: embedding,
           payload: {
             conversationId: chunk.conversationId,
@@ -68,7 +69,7 @@ class VectorMemoryManager {
 
       // 构建 points
       const points = chunks.map((chunk, idx) => ({
-        id: chunk.id || `${Date.now()}_${idx}_${Math.random().toString(36).substr(2, 9)}`,
+        id: chunk.id || deterministicPointId(`${chunk.conversationId}:${chunk.content}:${idx}`),
         vector: embeddings[idx],
         payload: {
           conversationId: chunk.conversationId,

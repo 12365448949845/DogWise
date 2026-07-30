@@ -45,8 +45,7 @@ class RerankService {
    * 简单重排：基于关键词匹配度
    */
   simpleRerank(query, candidates, topK) {
-    const queryLower = query.toLowerCase();
-    const queryWords = queryLower.split(/\s+/);
+    const queryWords = this.tokenize(query);
 
     const scored = candidates.map(candidate => {
       const contentLower = (candidate.content || '').toLowerCase();
@@ -58,8 +57,9 @@ class RerankService {
         }
       });
 
-      const coverage = matchCount / queryWords.length;
-      const rerankScore = candidate.score * 0.7 + coverage * 0.3;
+      const coverage = matchCount / Math.max(queryWords.length, 1);
+      const baseScore = candidate.fusionScore ?? candidate.score ?? 0;
+      const rerankScore = baseScore * 0.7 + coverage * 0.3;
 
       return {
         ...candidate,
@@ -72,6 +72,16 @@ class RerankService {
     console.log(`[RerankService] Simple reranked ${scored.length} candidates to top ${topK}`);
 
     return scored.slice(0, topK);
+  }
+
+  tokenize(text) {
+    const normalized = String(text || '').toLowerCase();
+    const tokens = normalized.match(/[a-z]+|\d+|[\u4e00-\u9fff]/g) || [];
+    const chinese = tokens.filter(token => /[\u4e00-\u9fff]/.test(token)).join('');
+    for (let i = 0; i < chinese.length - 1; i++) {
+      tokens.push(chinese.slice(i, i + 2));
+    }
+    return [...new Set(tokens)].filter(Boolean);
   }
 
   /**

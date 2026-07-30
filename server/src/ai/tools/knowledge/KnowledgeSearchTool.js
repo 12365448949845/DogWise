@@ -73,7 +73,12 @@ class KnowledgeSearchTool extends BaseTool {
       const filter = category ? { category } : null;
 
       // 从向量数据库检索
-      const results = await this.knowledgeManager.searchKnowledge(query, limit, filter);
+      const results = await this.knowledgeManager.hybridSearchKnowledge(
+        query,
+        limit,
+        Math.max(limit * 4, 12),
+        filter
+      );
 
       if (results.length === 0) {
         return {
@@ -90,8 +95,9 @@ class KnowledgeSearchTool extends BaseTool {
         content: r.content,
         category: r.metadata.category,
         breeds: r.metadata.breeds || [],
-        relevance: r.score,
-        source: r.metadata.sourceFile
+        score: r.rerankScore ?? r.fusionScore ?? r.score ?? 0,
+        relevance: r.rerankScore ?? r.fusionScore ?? r.score ?? 0,
+        source: r.metadata.documentTitle
       }));
 
       console.log(`[KnowledgeSearchTool] Found ${formattedKnowledge.length} relevant knowledge items`);

@@ -8,7 +8,7 @@ class DogRecipeRecommendTool extends BaseTool {
   constructor() {
     super();
     this.name = 'dog_recipe_recommend';
-    this.description = '根据用户提供的食材，推荐适合狗狗的营养菜品配方。包括食谱、制作步骤、营养分析和注意事项。';
+    this.description = '检查食材风险，并给出仅适合作为零食或临时加餐的狗狗食物做法；不能替代兽医营养师制定的完整主食。';
   }
 
   /**
@@ -58,8 +58,10 @@ class DogRecipeRecommendTool extends BaseTool {
     try {
       const { ingredients, dogInfo = {} } = input;
 
-      console.log('[DogRecipeRecommendTool] Recommending recipes for ingredients:', ingredients);
-      console.log('[DogRecipeRecommendTool] Dog info:', dogInfo);
+      if (!Array.isArray(ingredients) || ingredients.length === 0 ||
+          ingredients.length > 20 || ingredients.some(item => typeof item !== 'string')) {
+        return { success: false, error: 'invalid_ingredients', message: '请提供有效的食材列表。' };
+      }
 
       // 1. 食材安全性检查
       const safetyCheck = this.checkIngredientSafety(ingredients);
@@ -93,7 +95,11 @@ class DogRecipeRecommendTool extends BaseTool {
       return {
         success: true,
         recipes: recipes,
-        warnings: safetyCheck.warnings,
+        warnings: [
+          ...safetyCheck.warnings,
+          '自制食物不能长期替代营养完整的主粮，幼犬、孕犬和患病犬请先咨询兽医。',
+          '新食材应少量单独试喂，出现呕吐、腹泻、瘙痒或精神异常时立即停止。'
+        ],
         totalRecipes: recipes.length
       };
 
@@ -207,7 +213,7 @@ class DogRecipeRecommendTool extends BaseTool {
       );
 
       recipes.push({
-        name: '经典营养均衡餐',
+        name: '蛋白质蔬菜加餐（非完整主食）',
         ingredients: [proteinItem, carbItem, veggieItem].filter(Boolean),
         steps: [
           `将${proteinItem}切成小块，煮熟或蒸熟（不加调料）`,
@@ -219,13 +225,14 @@ class DogRecipeRecommendTool extends BaseTool {
           protein: '高',
           carbs: '适中',
           vitamins: '丰富',
-          minerals: '均衡'
+          minerals: '未评估'
         },
         portionGuide: this.getPortionGuide(dogInfo),
         notes: [
           '不添加盐、油、调料',
           '确保食材充分煮熟',
-          '冷却后再喂食，避免烫伤'
+          '冷却后再喂食，避免烫伤',
+          '不能长期替代营养完整的犬粮'
         ]
       });
     }
@@ -240,7 +247,7 @@ class DogRecipeRecommendTool extends BaseTool {
       );
 
       recipes.push({
-        name: '简易能量餐',
+        name: '简易临时加餐（非完整主食）',
         ingredients: [proteinItem, carbItem].filter(Boolean),
         steps: [
           `将${proteinItem}煮熟，撕成小块`,
@@ -256,7 +263,7 @@ class DogRecipeRecommendTool extends BaseTool {
         portionGuide: this.getPortionGuide(dogInfo),
         notes: [
           '适合快速准备',
-          '建议搭配蔬菜以获得更全面营养'
+          '营养并不完整，不能作为长期主食'
         ]
       });
     }
@@ -296,13 +303,13 @@ class DogRecipeRecommendTool extends BaseTool {
     // 如果没有生成任何配方，返回通用建议
     if (recipes.length === 0) {
       recipes.push({
-        name: '自由搭配建议',
+        name: '食材处理建议（非配方）',
         ingredients: ingredients,
         steps: [
-          '选择1-2种蛋白质食材（鸡肉、牛肉、鱼肉等）',
-          '搭配碳水化合物（米饭、红薯、南瓜等）',
-          '添加蔬菜（胡萝卜、西兰花等）',
-          '全部煮熟，不加调料，混合后冷却喂食'
+          '逐一确认食材对狗狗安全且不过敏',
+          '肉类去骨并彻底煮熟，蔬菜切碎煮熟',
+          '不加盐、油、糖或其他调味料',
+          '首次只提供少量并观察反应'
         ],
         nutrition: {
           protein: '视食材而定',
@@ -311,8 +318,8 @@ class DogRecipeRecommendTool extends BaseTool {
         },
         portionGuide: this.getPortionGuide(dogInfo),
         notes: [
-          '建议蛋白质:碳水:蔬菜 = 4:3:3',
-          '多样化搭配更健康'
+          '该建议没有完成钙磷、维生素和微量元素配平',
+          '长期自制主食需要兽医营养师制定配方'
         ]
       });
     }
@@ -325,24 +332,14 @@ class DogRecipeRecommendTool extends BaseTool {
    */
   getPortionGuide(dogInfo) {
     const { weight, age } = dogInfo;
+    const numericWeight = Number.parseFloat(String(weight || '').match(/\d+(?:\.\d+)?/)?.[0] || '');
+    const dogLabel = Number.isFinite(numericWeight) ? `${numericWeight} kg 的狗狗` : '狗狗';
 
-    if (weight) {
-      if (weight.includes('小') || weight.includes('5') || weight.includes('10')) {
-        return '每餐约100-200克（根据活动量调整）';
-      } else if (weight.includes('中') || weight.includes('15') || weight.includes('20')) {
-        return '每餐约200-400克（根据活动量调整）';
-      } else {
-        return '每餐约400-600克（根据活动量调整）';
-      }
+    if (age === '幼犬' || age === '老年犬') {
+      return `${dogLabel}处于特殊生命阶段，不提供通用克数；加餐量和正餐配方请由兽医按每日热量需求确定。`;
     }
 
-    if (age === '幼犬') {
-      return '每日3-4餐，每餐体重的4-6%';
-    } else if (age === '老年犬') {
-      return '每日2餐，每餐体重的2-3%';
-    }
-
-    return '每日2餐，每餐体重的2.5-3.5%（根据活动量调整）';
+    return `${dogLabel}首次仅少量试喂；作为零食或加餐时，连同其他零食合计不超过每日总热量的 10%。正餐克数必须结合食物热量密度计算。`;
   }
 }
 

@@ -1,3 +1,7 @@
+const configureDns = require('./dns');
+
+configureDns();
+
 const mongoose = require('mongoose');
 
 const connectDB = async () => {

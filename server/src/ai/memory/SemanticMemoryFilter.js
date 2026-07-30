@@ -89,6 +89,14 @@ class SemanticMemoryFilter {
           ...msg,
           index: i
         });
+
+        const assistantMessage = messages[i + 1];
+        if (assistantMessage?.role === 'assistant') {
+          semanticMessages.push({
+            ...assistantMessage,
+            index: i + 1
+          });
+        }
       }
     }
 

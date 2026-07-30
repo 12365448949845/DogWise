@@ -1,6 +1,10 @@
 const KnowledgeArticle = require('../models/KnowledgeArticle');
 const User = require('../models/User');
 const cache = require('../utils/redis');
+const {
+  deleteKnowledgeArticleVector,
+  syncKnowledgeArticle
+} = require('../ai/knowledge/MongoKnowledgeSync');
 
 const addSummary = (doc) => {
   const obj = doc.toObject ? doc.toObject() : { ...doc };
@@ -97,6 +101,9 @@ const createArticle = async (data, userId) => {
 
   // Invalidate list caches
   await cache.delByPattern('knowledge:*');
+  syncKnowledgeArticle(article).catch(error => {
+    console.error('[knowledgeService] Vector sync failed:', error.message);
+  });
 
   return article.populate('author', 'username avatar role');
 };
@@ -112,6 +119,9 @@ const updateArticle = async (id, data) => {
   }
 
   await cache.delByPattern('knowledge:*');
+  syncKnowledgeArticle(article).catch(error => {
+    console.error('[knowledgeService] Vector sync failed:', error.message);
+  });
   return article;
 };
 
@@ -124,6 +134,9 @@ const deleteArticle = async (id) => {
   }
 
   await cache.delByPattern('knowledge:*');
+  deleteKnowledgeArticleVector(article._id).catch(error => {
+    console.error('[knowledgeService] Vector delete failed:', error.message);
+  });
   return { deleted: true };
 };
 

@@ -1,4 +1,7 @@
 const Conversation = require('../models/Conversation');
+const { getRedisClient } = require('../config/redis');
+const MemoryManager = require('../ai/memory/MemoryManager');
+const VectorMemoryManager = require('../ai/memory/VectorMemoryManager');
 
 /**
  * GET /api/ai/conversations
@@ -48,7 +51,11 @@ exports.getConversationById = async (req, res) => {
     const userId = req.user?.id;
     const { id } = req.params;
 
-    const conversation = await Conversation.findOne({ _id: id, user: userId }).lean();
+    const conversation = await Conversation.findOne({
+      _id: id,
+      user: userId,
+      status: 'active'
+    }).lean();
 
     if (!conversation) {
       return res.status(404).json({
@@ -96,6 +103,17 @@ exports.deleteConversation = async (req, res) => {
     // 软删除（标记为 archived）
     conversation.status = 'archived';
     await conversation.save();
+
+    Promise.allSettled([
+      new MemoryManager(getRedisClient()).clearMemory(id),
+      new VectorMemoryManager().deleteByConversation(id)
+    ]).then(cleanupResults => {
+      cleanupResults.forEach(result => {
+        if (result.status === 'rejected') {
+          console.error('[deleteConversation] Memory cleanup failed:', result.reason?.message);
+        }
+      });
+    });
 
     res.json({
       code: 200,

@@ -47,8 +47,6 @@ class StructuredInfoExtractTool extends BaseTool {
       // 解析 JSON 结果
       const structuredData = this.parseExtractedData(extractedText);
 
-      console.log('[StructuredInfoExtractTool] Extracted structured data:', structuredData);
-
       return structuredData;
     } catch (error) {
       console.error('[StructuredInfoExtractTool] Error:', error);
@@ -61,8 +59,9 @@ class StructuredInfoExtractTool extends BaseTool {
    */
   buildConversationText(messages) {
     return messages
+      .filter(msg => msg.role === 'user')
       .slice(-10) // 只取最近 10 条消息
-      .map(msg => `${msg.role === 'user' ? '用户' : '助手'}: ${msg.content}`)
+      .map(msg => `用户: ${msg.content}`)
       .join('\n');
   }
 
@@ -133,9 +132,9 @@ JSON 输出：`;
 
       // 如果没有有效数据，返回空对象
       if (!data.dogs || data.dogs.length === 0) {
-        if (!data.preferences ||
-            (data.preferences.interestedTopics.length === 0 &&
-             data.preferences.dislikedTopics.length === 0)) {
+        const interestedTopics = data.preferences?.interestedTopics || [];
+        const dislikedTopics = data.preferences?.dislikedTopics || [];
+        if (interestedTopics.length === 0 && dislikedTopics.length === 0) {
           return {};
         }
       }

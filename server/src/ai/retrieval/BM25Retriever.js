@@ -1,5 +1,3 @@
-const natural = require('natural');
-
 /**
  * BM25Retriever - BM25 关键词检索器
  * 基于词频和逆文档频率的稀疏检索
@@ -65,7 +63,9 @@ class BM25Retriever {
 
     // 计算平均文档长度
     const totalLength = this.tokenizedDocs.reduce((sum, tokens) => sum + tokens.length, 0);
-    this.avgDocLength = totalLength / this.tokenizedDocs.length;
+    this.avgDocLength = this.tokenizedDocs.length > 0
+      ? totalLength / this.tokenizedDocs.length
+      : 0;
 
     // 计算 IDF
     this.calculateIDF();
@@ -145,7 +145,7 @@ class BM25Retriever {
     const scores = [];
     this.documents.forEach((doc, idx) => {
       // 按用户 ID 过滤
-      if (doc.userId !== userId) {
+      if (userId && doc.userId !== userId) {
         return;
       }
 

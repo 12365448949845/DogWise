@@ -4,102 +4,129 @@ const SemanticChunker = require('../memory/SemanticChunker');
 const VectorMemoryManager = require('../memory/VectorMemoryManager');
 const User = require('../../models/User');
 
-/**
- * MemoryProcessingService - 记忆处理服务
- * 异步处理对话记忆（不阻塞用户响应）
- */
-
-/**
- * 异步处理记忆
- * @param {string} conversationId - 对话 ID
- * @param {Array} messages - 消息数组 [{ role, content, timestamp }]
- * @param {string} userId - 用户 ID
- */
 async function processMemoryAsync(conversationId, messages, userId) {
-  console.log(`[MemoryProcessing] Starting memory processing for conversation: ${conversationId}`);
-
   try {
-    // 1. 提取结构化信息
-    await extractAndSaveStructuredInfo(messages, userId);
-
-    // 2. 处理语义记忆
+    if (containsProfileSignal(messages)) {
+      await extractAndMergeStructuredInfo(messages, userId);
+    }
     await processSemanticMemory(conversationId, messages, userId);
-
-    console.log('[MemoryProcessing] Memory processing completed successfully');
   } catch (error) {
-    console.error('[MemoryProcessing] Error during memory processing:', error);
-    // 不抛出错误，避免影响主流程
+    console.error('[MemoryProcessing] Processing failed:', error.message);
   }
 }
 
-/**
- * 提取并保存结构化信息
- */
-async function extractAndSaveStructuredInfo(messages, userId) {
+async function extractAndMergeStructuredInfo(messages, userId) {
   try {
     const structuredTool = new StructuredInfoExtractTool();
-    const structuredData = await structuredTool.execute({ messages }, { userId });
+    const extracted = await structuredTool.execute({ messages }, { userId });
+    if (!extracted || Object.keys(extracted).length === 0) return;
 
-    if (structuredData && Object.keys(structuredData).length > 0) {
-      // 更新 User 模型的 dogProfile
-      await User.findByIdAndUpdate(
-        userId,
-        {
-          $set: { dogProfile: structuredData }
-        },
-        { new: true, upsert: false }
-      );
+    const user = await User.findById(userId).select('dogProfile');
+    if (!user) return;
 
-      console.log('[MemoryProcessing] Updated structured data for user:', userId);
-      console.log('[MemoryProcessing] Structured data:', JSON.stringify(structuredData, null, 2));
-    } else {
-      console.log('[MemoryProcessing] No structured data extracted');
-    }
+    const current = user.dogProfile?.toObject?.() || user.dogProfile || {};
+    user.dogProfile = mergeDogProfiles(current, extracted);
+    await user.save();
+    console.log('[MemoryProcessing] Merged structured dog profile');
   } catch (error) {
-    console.error('[MemoryProcessing] Error extracting structured info:', error);
+    console.error('[MemoryProcessing] Structured extraction failed:', error.message);
   }
 }
 
-/**
- * 处理语义记忆
- */
 async function processSemanticMemory(conversationId, messages, userId) {
   try {
-    // 1. 过滤语义记忆
-    const filter = new SemanticMemoryFilter();
-    const semanticMessages = filter.filter(messages);
+    const semanticMessages = new SemanticMemoryFilter().filter(messages);
+    if (semanticMessages.length === 0) return;
 
-    if (!semanticMessages || semanticMessages.length === 0) {
-      console.log('[MemoryProcessing] No semantic content to store');
-      return;
-    }
-
-    console.log(`[MemoryProcessing] Filtered ${semanticMessages.length} messages for semantic storage`);
-
-    // 2. 切块
-    const chunker = new SemanticChunker();
-    const chunks = await chunker.chunk(semanticMessages, {
+    const chunks = await new SemanticChunker().chunk(semanticMessages, {
       conversationId,
       userId
     });
+    if (chunks.length === 0) return;
 
-    if (!chunks || chunks.length === 0) {
-      console.log('[MemoryProcessing] No chunks created');
-      return;
-    }
-
-    console.log(`[MemoryProcessing] Created ${chunks.length} chunks`);
-
-    // 3. 存入向量数据库
-    const vectorMemory = new VectorMemoryManager();
-    await vectorMemory.saveBatchMemories(chunks);
-
-    console.log(`[MemoryProcessing] Saved ${chunks.length} chunks to vector DB`);
+    await new VectorMemoryManager().saveBatchMemories(chunks);
+    console.log(`[MemoryProcessing] Upserted ${chunks.length} semantic memories`);
   } catch (error) {
-    console.error('[MemoryProcessing] Error processing semantic memory:', error);
+    console.error('[MemoryProcessing] Semantic memory failed:', error.message);
   }
 }
 
+function containsProfileSignal(messages) {
+  const userText = (messages || [])
+    .filter(message => message.role === 'user')
+    .map(message => message.content || '')
+    .join('\n');
+  return /(名字|叫做|品种|年龄|岁|个月|性别|公狗|母狗|体重|公斤|kg|过敏|疫苗|确诊|病史)/i.test(userText);
+}
+
+function mergeDogProfiles(current = {}, incoming = {}) {
+  const currentDogs = Array.isArray(current.dogs) ? current.dogs.map(toPlainObject) : [];
+  const incomingDogs = Array.isArray(incoming.dogs) ? incoming.dogs.map(toPlainObject) : [];
+  const dogs = [...currentDogs];
+
+  for (const incomingDog of incomingDogs) {
+    const index = findMatchingDog(dogs, incomingDog);
+    if (index === -1) {
+      dogs.push(cleanObject(incomingDog));
+    } else {
+      dogs[index] = mergeDog(dogs[index], incomingDog);
+    }
+  }
+
+  return {
+    dogs,
+    preferences: {
+      interestedTopics: mergeArrays(
+        current.preferences?.interestedTopics,
+        incoming.preferences?.interestedTopics
+      ),
+      dislikedTopics: mergeArrays(
+        current.preferences?.dislikedTopics,
+        incoming.preferences?.dislikedTopics
+      )
+    }
+  };
+}
+
+function findMatchingDog(dogs, incomingDog) {
+  if (incomingDog.name) {
+    const byName = dogs.findIndex(dog => dog.name === incomingDog.name);
+    if (byName !== -1) return byName;
+  }
+  return dogs.length === 1 && !incomingDog.name ? 0 : -1;
+}
+
+function mergeDog(currentDog, incomingDog) {
+  const merged = { ...toPlainObject(currentDog) };
+  for (const [key, value] of Object.entries(incomingDog)) {
+    if (value === null || value === undefined || value === '') continue;
+    if (Array.isArray(value)) {
+      merged[key] = mergeArrays(merged[key], value);
+    } else {
+      merged[key] = value;
+    }
+  }
+  return cleanObject(merged);
+}
+
+function mergeArrays(first, second) {
+  const values = [...(Array.isArray(first) ? first : []), ...(Array.isArray(second) ? second : [])]
+    .filter(value => value !== null && value !== undefined && value !== '');
+  return [...new Map(values.map(value => [JSON.stringify(value), value])).values()];
+}
+
+function cleanObject(value) {
+  return Object.fromEntries(Object.entries(toPlainObject(value)).filter(([, item]) =>
+    item !== null && item !== undefined && item !== ''
+  ));
+}
+
+function toPlainObject(value) {
+  return value?.toObject?.() || value || {};
+}
+
 module.exports = {
-  processMemoryAsync
+  processMemoryAsync,
+  mergeDogProfiles,
+  containsProfileSignal
 };

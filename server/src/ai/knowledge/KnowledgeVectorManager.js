@@ -1,6 +1,7 @@
 const { getQdrantClient } = require('../../config/qdrant');
 const EmbeddingService = require('../services/EmbeddingService');
 const HybridRetriever = require('../retrieval/HybridRetriever');
+const { deterministicPointId } = require('../utils/pointId');
 
 /**
  * KnowledgeVectorManager - 知识库向量管理器
@@ -25,14 +26,13 @@ class KnowledgeVectorManager {
     }
 
     try {
-      // 使用 summary（如果有）或 content 生成 embedding
-      const textToEmbed = chunk.summary || chunk.content;
+      const textToEmbed = this.buildEmbeddingText(chunk);
       const embedding = await this.embeddingService.generateEmbedding(textToEmbed);
 
       // 存储到 Qdrant
       await this.client.upsert(this.collectionName, {
         points: [{
-          id: chunk.metadata.documentId + '_' + chunk.metadata.chunkIndex + '_' + Date.now(),
+          id: this.buildPointId(chunk),
           vector: embedding,
           payload: {
             content: chunk.content,
@@ -61,12 +61,12 @@ class KnowledgeVectorManager {
 
     try {
       // 批量生成 embeddings
-      const texts = chunks.map(c => c.summary || c.content);
+      const texts = chunks.map(chunk => this.buildEmbeddingText(chunk));
       const embeddings = await this.embeddingService.generateBatchEmbeddings(texts);
 
       // 构建 points
       const points = chunks.map((chunk, idx) => ({
-        id: Date.now() + idx,
+        id: this.buildPointId(chunk),
         vector: embeddings[idx],
         payload: {
           content: chunk.content,
@@ -83,6 +83,20 @@ class KnowledgeVectorManager {
       console.error('[KnowledgeVectorManager] Error saving batch knowledge:', error);
       throw error;
     }
+  }
+
+  buildEmbeddingText(chunk) {
+    return [
+      chunk.metadata?.documentTitle,
+      chunk.metadata?.section,
+      chunk.summary,
+      chunk.content
+    ].filter(Boolean).join('\n');
+  }
+
+  buildPointId(chunk) {
+    const metadata = chunk.metadata || {};
+    return deterministicPointId(`${metadata.documentId || metadata.sourceFile || 'knowledge'}:${metadata.chunkIndex || 0}`);
   }
 
   /**
@@ -152,9 +166,13 @@ class KnowledgeVectorManager {
         this.hybridRetriever.collectionName = this.collectionName;
       }
 
-      // TODO: HybridRetriever 需要支持全局检索（不限 userId）
-      // 临时方案：使用基础向量检索
-      const results = await this.searchKnowledge(query, topK, filter);
+      const results = await this.hybridRetriever.search(
+        query,
+        null,
+        topK,
+        candidateSize,
+        this.buildFilter(filter)
+      );
 
       console.log(`[KnowledgeVectorManager] Hybrid search found ${results.length} knowledge items for query: "${query}"`);
 

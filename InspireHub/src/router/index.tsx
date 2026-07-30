@@ -92,7 +92,7 @@ const router = createBrowserRouter([
       },
       {
         path: 'ai',
-        element: <SuspenseWrapper><AIChat /></SuspenseWrapper>,
+        element: <ProtectedRoute><SuspenseWrapper><AIChat /></SuspenseWrapper></ProtectedRoute>,
       },
 
       /* ──── Auth ──── */

@@ -12,6 +12,7 @@ function getQdrantClient() {
 
     qdrantClient = new QdrantClient({
       url: url,
+      timeout: Number(process.env.QDRANT_TIMEOUT_MS || 10000),
       ...(apiKey && { apiKey: apiKey })
     });
 

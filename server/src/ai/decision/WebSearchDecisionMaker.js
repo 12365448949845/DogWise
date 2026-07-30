@@ -78,7 +78,7 @@ class WebSearchDecisionMaker {
     }
 
     // 计算 RAG 指标
-    const avgScore = ragResult.knowledge.reduce((sum, k) => sum + (k.score || 0), 0) / ragResult.knowledge.length;
+    const avgScore = this.getAverageScore(ragResult.knowledge);
     const totalLength = ragResult.knowledge.reduce((sum, k) => sum + k.content.length, 0);
 
     // 规则 3: 明确的时效性需求 → 必须搜索（优先级最高，因为即使 RAG 充分也可能过时）
@@ -193,7 +193,7 @@ ${ragSummary}
       return '（无检索结果）';
     }
 
-    const avgScore = ragResult.knowledge.reduce((sum, k) => sum + (k.score || 0), 0) / ragResult.knowledge.length;
+    const avgScore = this.getAverageScore(ragResult.knowledge);
     const totalLength = ragResult.knowledge.reduce((sum, k) => sum + k.content.length, 0);
 
     let summary = `检索到 ${ragResult.knowledge.length} 条知识，平均相关性：${avgScore.toFixed(2)}，总字数：${totalLength}\n\n`;
@@ -201,10 +201,20 @@ ${ragSummary}
     summary += '知识摘要：\n';
     ragResult.knowledge.forEach((k, idx) => {
       const preview = k.content.slice(0, 100) + (k.content.length > 100 ? '...' : '');
-      summary += `${idx + 1}. ${k.title} (分数: ${(k.score || 0).toFixed(2)})\n   ${preview}\n`;
+      summary += `${idx + 1}. ${k.title} (分数: ${this.getScore(k).toFixed(2)})\n   ${preview}\n`;
     });
 
     return summary;
+  }
+
+  getScore(item) {
+    const score = item?.score ?? item?.relevance ?? 0;
+    return Number.isFinite(Number(score)) ? Number(score) : 0;
+  }
+
+  getAverageScore(items) {
+    if (!Array.isArray(items) || items.length === 0) return 0;
+    return items.reduce((sum, item) => sum + this.getScore(item), 0) / items.length;
   }
 }
 

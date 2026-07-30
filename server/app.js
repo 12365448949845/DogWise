@@ -12,10 +12,12 @@ const PORT = process.env.PORT || 3001;
 const path = require('path');
 
 // CORS 配置
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim()).filter(Boolean)
+  : ['http://localhost:5175', 'http://127.0.0.1:5175'];
+
 const corsOptions = {
-  origin: process.env.ALLOWED_ORIGINS
-    ? process.env.ALLOWED_ORIGINS.split(',')
-    : ['http://localhost:5173'],  // 默认只允许前端开发服务器
+  origin: allowedOrigins,
   credentials: true,  // 允许携带凭证（cookies, authorization headers）
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization'],
